@@ -2,3 +2,5 @@ cabal-dev
 dist
 .hpc
 upload-docs
+.cabal-sandbox
+cabal.sandbox.config

@@ -13,10 +13,13 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 module Data.IntervalSet.ByteString
        ( fromByteString
        , toByteString
        ) where
+
+#include "MachDeps.h"
 
 import Data.Bits
 import           Data.ByteString (ByteString)
@@ -26,11 +29,6 @@ import Control.Monad as CM
 import Foreign
 
 import Data.IntervalSet.Internal as S
-
-
-#if defined(__GLASGOW_HASKELL__)
-#include "MachDeps.h"
-#endif
 
 {-
   it seems like we have this conversion hella fast by desing

@@ -8,16 +8,14 @@
 --   See documentation for module header in Data.IntSet.Buddy.
 --
 {-# LANGUAGE CPP #-}
-
-#if __GLASGOW_HASKELL__
 {-# LANGUAGE DeriveDataTypeable #-}
-#endif
-
--- TODO use 'seq' instead of bang patterns
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE BangPatterns #-}
 
-#if __GLASGOW_HASKELL__ >= 720
--- TODO The only unsafe import is Data.Bits.Extras
+#if __GLASGOW_HASKELL__ >= 710
+{-# LANGUAGE Safe #-}
+#else
+-- The only unsafe import is Data.Bits.Extras
 {-# LANGUAGE Trustworthy #-}
 #endif
 
@@ -116,22 +114,46 @@ module Data.IntervalSet.Internal
        , symDiff'
        ) where
 
+-- machine specific properties of basic types
+#include "MachDeps.h"
 
 import Control.DeepSeq
 import Data.Bits as Bits
-import Data.Bits.Extras
 import Data.Data
 import qualified Data.List as L
-import Data.Monoid
 import Data.Ord
+import GHC.Generics (Generic)
+
+#if __GLASGOW_HASKELL__ >= 710
+
+findMinBM :: BitMap -> Int
+findMinBM = countTrailingZeros
+{-# INLINE findMinBM #-}
+
+findMaxBM :: BitMap -> Int
+findMaxBM x = (WORD_SIZE_IN_BITS - 1) - countLeadingZeros x
+{-# INLINE findMaxBM #-}
+
+#else
+
+import Data.Monoid
 import Data.Word
+import Data.Bits.Extras
 
+findMinBM :: BitMap -> Int
+findMinBM = fromIntegral . trailingZeros
+{-# INLINE findMinBM #-}
 
--- machine specific properties of basic types
-#if defined(__GLASGOW_HASKELL__)
-#include "MachDeps.h"
+findMaxBM :: BitMap -> Int
+findMaxBM x = fromIntegral ((WORD_SIZE_IN_BITS - 1) - leadingZeros x)
+{-# INLINE findMaxBM #-}
+
 #endif
 
+#if __GLASGOW_HASKELL__ < 708
+finiteBitSize :: Bits a => a -> Int
+finiteBitSize = bitSize
+#endif
 
 -- | Prefix is used to distinguish subtrees by its prefix bits.  When
 --   new prefix is created its non prefix bits are zeroed.  Prefix is
@@ -199,11 +221,7 @@ data IntSet
   -- | Empty set. Contains nothing.
   | Nil
   deriving
-    ( Eq
-#if defined(__GLASGOW_HASKELL__)
-    , Typeable, Data
-#endif
-    )
+    ( Eq, Typeable, Data, Generic )
 
 {--------------------------------------------------------------------
   Invariants
@@ -503,16 +521,16 @@ insertBM :: Prefix -> BitMap -> IntSet -> IntSet
 insertBM !kx !bm = go
   where -- do not use worker; use wrapper in go
     go t@(Bin p m l r)
-      | nomatch kx p m = join kx (Tip kx bm) p t
+      | nomatch kx p m = join' kx (Tip kx bm) p t
       |    zero kx m   = binI p m (insertBM kx bm l) r
       |    otherwise   = binI p m l (insertBM kx bm r)
 
     go t@(Tip kx' bm')
       | kx' == kx = tipI kx (bm .|. bm')
-      | otherwise = join kx (Tip kx bm) kx' t
+      | otherwise = join' kx (Tip kx bm) kx' t
 
     go t@(Fin   p m  )
-      | nomatch kx p (finMask m) = join kx (Tip kx bm) p t
+      | nomatch kx p (finMask m) = join' kx (Tip kx bm) p t
       |        otherwise          = t
 
     go    Nil          = Tip kx bm
@@ -579,15 +597,15 @@ union t1@(Bin p1 m1 l1 r1) t2@(Bin p2 m2 l2 r2)
     | shorter m1 m2 = leftiest
     | shorter m2 m1 = rightiest
     | p1 == p2      = binI p1 m1 (l1 `union` l2) (r1 `union` r2)
-    | otherwise     = join p1 t1 p2 t2
+    | otherwise     = join' p1 t1 p2 t2
   where
     leftiest
-      | nomatch p2 p1 m1 = join p1 t1 p2 t2
+      | nomatch p2 p1 m1 = join' p1 t1 p2 t2
       |     zero p2 m1   = binI p1 m1 (l1 `union` t2) r1
       |      otherwise   = binI p1 m1 l1 (r1 `union` t2)
 
     rightiest
-      | nomatch p1 p2 m2 = join p1 t1 p2 t2
+      | nomatch p1 p2 m2 = join' p1 t1 p2 t2
       |    zero p1 m2    = binI p2 m2 (t1 `union` l2) r2
       |     otherwise    = binI p2 m2 l2 (t1 `union` r2)
 
@@ -606,7 +624,7 @@ insertFin p1 m1  t2@(Bin p2 m2 l r)
       then binI p2 m2 (insertFin p1 m1 l) r
       else binI p2 m2 l (insertFin p1 m1 r)
     | match p2 p1 (finMask m1) = Fin p1 m1
-    |        otherwise         = join p1 (Fin p1 m1) p2 t2
+    |        otherwise         = join' p1 (Fin p1 m1) p2 t2
 
 insertFin p1 m1 (Tip p bm) = insertBM p bm (Fin p1 m1)
 insertFin p1 m1 (Fin p2 m2 ) -- TODO simplify
@@ -615,7 +633,7 @@ insertFin p1 m1 (Fin p2 m2 ) -- TODO simplify
     | properSubsetOf p1 m1 p2 m2 = Fin p2 m2
     | properSubsetOf p2 m2 p1 m1 = Fin p1 m1
     |     m1 == m2 && p1 == p2   = Fin p1 m1
-    |         otherwise          = join p1 (Fin p1 m1) p2 (Fin p2 m2)
+    |         otherwise          = join' p1 (Fin p1 m1) p2 (Fin p2 m2)
 
 insertFin p m Nil = Fin p m
 
@@ -832,15 +850,15 @@ symDiff t1@(Bin p1 m1 l1 r1) t2@(Bin p2 m2 l2 r2)
     | m1 `shorter` m2 = leftiest
     | m2 `shorter` m1 = rightiest
     |    p1 == p2     = bin  p1 m1 (symDiff l1 l2) (symDiff r1 r2)
-    |   otherwise     = join p1 t1 p2 t2
+    |   otherwise     = join' p1 t1 p2 t2
   where
     leftiest
-      | nomatch p2 p1 m1 = join p1 t1 p2 t2
+      | nomatch p2 p1 m1 = join' p1 t1 p2 t2
       |    zero p2 m1    = bin  p1 m1 (symDiff l1 t2) r1 -- TODO tune (symDiff l1 t2)
       |    otherwise     = bin  p1 m1 l1 (symDiff r1 t2)
 
     rightiest
-      | nomatch p1 p2 m2 = join p2 t2 p1 t1
+      | nomatch p1 p2 m2 = join' p2 t2 p1 t1
       |    zero p1 m2    = bin  p2 m2 (symDiff l2 t1) r2 -- TODO tune (symDiff l1 t2)
       |    otherwise     = bin  p2 m2 l2 (symDiff r2 t1)
 
@@ -858,16 +876,16 @@ symDiffTip :: Prefix -> BitMap -> IntSet -> IntSet
 symDiffTip !p1 !bm1 = go
   where
     go t2@(Bin p2 m2 l r)
-      | nomatch p1 p2 m2 = join p1 (Tip p1 bm1) p2 t2
+      | nomatch p1 p2 m2 = join' p1 (Tip p1 bm1) p2 t2
       |    zero p1 m2    = bin  p2 m2 (symDiffTip p1 bm1 l) r -- not use go
       |     otherwise    = bin  p2 m2 l (symDiffTip p1 bm1 r) -- not use go
 
     go t2@(Tip p2 bm2)
       |  p1 == p2 = tip p1 (bm1 `xor` bm2)
-      | otherwise = join p1 (Tip p1 bm1) p2 t2
+      | otherwise = join' p1 (Tip p1 bm1) p2 t2
 
     go t2@(Fin p2 m2)
-      | nomatch p1 p2 (finMask m2) = join p1 (Tip p1 bm1) p2 t2
+      | nomatch p1 p2 (finMask m2) = join' p1 (Tip p1 bm1) p2 t2
       |         otherwise          = symDiffTip p1 bm1 (splitFin p2 m2)  -- not use go
 
     go     Nil = Tip p1 bm1
@@ -879,23 +897,23 @@ symDiffFin !p1 !m1 = go
       | finMask m1 `shorterEq` m2
       = if match p2 p1 (finMask m1)
         then symDiff (splitFin p1 m1) t2
-        else join p1 (Fin p1 m1) p2 t2
+        else join' p1 (Fin p1 m1) p2 t2
 
       | otherwise = goDown -- TODO inline
       where
         goDown
-          | nomatch p1 p2 m2 = join p1 (Fin p1 m1) p2 t2
+          | nomatch p1 p2 m2 = join' p1 (Fin p1 m1) p2 t2
           |    zero p1 m2    = bin p2 m2 (go l) r
           |     otherwise    = bin p2 m2 l (go r)
 
     go (Fin p2 m2 ) -- TODO try use compare m1 m2
       | m1 `shorter` m2 = if match p2 p1 (finMask m1)
                           then symDiffFin p2 m2 (splitFin p1 m1)
-                          else join p1 (Fin p1 m1) p2 (Fin p2 m2)
+                          else join' p1 (Fin p1 m1) p2 (Fin p2 m2)
 
       | m2 `shorter` m1 = if match p1 p2 (finMask m2)
                           then symDiffFin p2 m2 (splitFin p1 m1)
-                          else join p1 (Fin p1 m1) p2 (Fin p2 m2)
+                          else join' p1 (Fin p1 m1) p2 (Fin p2 m2)
 
       |    p1 == p2     = Nil
       -- here we have (m1 == m2 && p1 /= p1) and should check if Fin's are buddies
@@ -903,7 +921,7 @@ symDiffFin !p1 !m1 = go
                           then Fin p1 (m1 * 2)
                           else Fin p2 (m1 * 2)
 
-      |    otherwise    = join p1 (Fin p1 m1) p2 (Fin p2 m2)
+      |    otherwise    = join' p1 (Fin p1 m1) p2 (Fin p2 m2)
 
     go (Tip p2 bm2)    = symDiffTip p2 bm2 (Fin p1 m1)
     go  Nil            = Fin p1 m1
@@ -1084,11 +1102,6 @@ findMin (Tip p bm) = p + findMinBM bm
 findMin (Fin p _)  = p
 findMin  Nil       = error "findMin: empty set"
 
-findMinBM :: BitMap -> Int
-findMinBM = fromIntegral . trailingZeros
-{-# INLINE findMinBM #-}
-
-
 -- | /O(min(W, n))/ or /O(1)/. Find maximal element of the set.
 --  Is set is empty then max is undefined.
 --
@@ -1105,10 +1118,6 @@ findMax (Bin _ rootM l r)
 findMax (Tip p bm) = p + findMaxBM bm
 findMax (Fin p m ) = p + m - 1
 findMax  Nil       = error "findMax: empty set"
-
-findMaxBM :: BitMap -> Int
-findMaxBM x = fromIntegral ((WORD_SIZE_IN_BITS - 1) - leadingZeros x)
-{-# INLINE findMaxBM #-}
 
 {--------------------------------------------------------------------
    Conversion Fusion
@@ -1302,15 +1311,15 @@ bin p m l   r  = Bin p m l r
 {-# INLINE bin #-}
 
 
--- note that join should not merge buddies
-join :: Prefix -> IntSet -> Prefix -> IntSet -> IntSet
-join p1 t1 p2 t2
+-- note that join' should not merge buddies
+join' :: Prefix -> IntSet -> Prefix -> IntSet -> IntSet
+join' p1 t1 p2 t2
     | zero p1 m = Bin p m t1 t2
     | otherwise = Bin p m t2 t1
   where
     p = mask p1 m
     m = branchMask p1 p2
-{-# INLINE join #-}
+{-# INLINE join' #-}
 
 
 {--------------------------------------------------------------------
@@ -1517,7 +1526,7 @@ finMask m = m `shiftR` 1
 ----------------------------------------------------------------------}
 
 suffixBitMask :: Int
-suffixBitMask = bitSize (undefined :: Word) - 1
+suffixBitMask = finiteBitSize (undefined :: Word) - 1
 {-# INLINE suffixBitMask #-}
 
 prefixBitMask :: Int
