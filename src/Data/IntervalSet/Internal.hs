@@ -284,6 +284,11 @@ instance Ord IntSet where
   compare = comparing toList
   -- TODO make it faster
 
+#if MIN_VERSION_base(4,11,0)
+instance Semigroup IntSet where
+  (<>) = union
+#endif
+
 instance Monoid IntSet where
   mempty  = empty
   mappend = union
@@ -316,6 +321,11 @@ instance NFData IntSet where
 newtype Union = Union { getUnion :: IntSet }
                 deriving (Show, Read, Eq, Ord)
 
+#if MIN_VERSION_base(4,11,0)
+instance Semigroup Union where
+  Union a <> Union b = Union (a `union` b)
+#endif
+
 instance Monoid Union where
   mempty      = Union empty
   mappend a b = Union (getUnion a `union` getUnion b)
@@ -328,6 +338,11 @@ instance Monoid Union where
 newtype Intersection = Intersection { getIntersection :: IntSet }
                        deriving (Show, Read, Eq, Ord)
 
+#if MIN_VERSION_base(4,11,0)
+instance Semigroup Intersection where
+  Intersection a <> Intersection b = Intersection (a `intersection` b)
+#endif
+
 instance Monoid Intersection where
   mempty      = Intersection universe
   mappend a b = Intersection (getIntersection a `intersection` getIntersection b)
@@ -339,6 +354,11 @@ instance Monoid Intersection where
 --
 newtype Difference = Difference { getDifference :: IntSet }
                      deriving (Show, Read, Eq, Ord)
+
+#if MIN_VERSION_base(4,11,0)
+instance Semigroup Difference where
+  Difference a <> Difference b = Difference (a `symDiff` b)
+#endif
 
 instance Monoid Difference where
   mempty      = Difference empty
